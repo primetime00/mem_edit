@@ -11,23 +11,26 @@ To get started, try:
     help(Process)
 
 """
-import platform
-import pathlib
+import platform, os
 
 from .utils import MemEditError
 
 
 __author__ = 'Jan Petykiewicz'
 
-with open(pathlib.Path(__file__).parent / 'VERSION', 'r') as f:
-    __version__ = f.read().strip()
-version = __version__
+from .VERSION import __version__
+version = __version__       # legacy compatibility
 
 
 system = platform.system()
 if system == 'Windows':
     from .windows import Process
 elif system == 'Linux':
-    from .linux import Process
+    kv = os.uname().release.split(".")
+    major, minor = int(kv[0]), int(kv[1])
+    if (os.geteuid() == 0) and ((major > 3) or (major == 3 and minor >= 2)):
+        from .linux_vm import Process
+    else:
+        from .linux import Process
 else:
     raise MemEditError('Only Linux and Windows are currently supported.')

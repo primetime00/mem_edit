@@ -2,7 +2,7 @@
 Implementation of Process class for Linux
 """
 
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from os import strerror
 import os
 import os.path
@@ -10,23 +10,23 @@ import signal
 import ctypes
 import ctypes.util
 import logging
+import re
 
 from .abstract import Process as AbstractProcess
 from .utils import ctypes_buffer_t, MemEditError
 
 
-logging.basicConfig(level=logging.CRITICAL)
 logger = logging.getLogger(__name__)
 
 
 ptrace_commands = {
-        'PTRACE_GETREGS': 12,
-        'PTRACE_SETREGS': 13,
-        'PTRACE_ATTACH': 16,
-        'PTRACE_DETACH': 17,
-        'PTRACE_SYSCALL': 24,
-        'PTRACE_SEIZE': 16902,
-        }
+    'PTRACE_GETREGS': 12,
+    'PTRACE_SETREGS': 13,
+    'PTRACE_ATTACH': 16,
+    'PTRACE_DETACH': 17,
+    'PTRACE_SYSCALL': 24,
+    'PTRACE_SEIZE': 16902,
+    }
 
 
 # import ptrace() from libc
@@ -50,45 +50,32 @@ def ptrace(command: int, pid: int = 0, arg1: int = 0, arg2: int = 0) -> int:
     return result
 
 
-class iovec(ctypes.Structure):
-    _fields_ = [("iov_base", ctypes.c_void_p),
-                ("iov_len", ctypes.c_size_t)]
-
 class Process(AbstractProcess):
     pid = None
 
     def __init__(self, process_id: int):
+        ptrace(ptrace_commands['PTRACE_SEIZE'], process_id)
         self.pid = process_id
 
     def close(self):
+        os.kill(self.pid, signal.SIGSTOP)
+        try:
+            os.waitpid(self.pid, 0)
+        except ChildProcessError:
+            pass
+        ptrace(ptrace_commands['PTRACE_DETACH'], self.pid, 0, 0)
+        os.kill(self.pid, signal.SIGCONT)
         self.pid = None
 
     def write_memory(self, base_address: int, write_buffer: ctypes_buffer_t):
-
-        _libc.process_vm_readv(
-            self.pid,
-            (iovec * 1)(
-                iovec(ctypes.addressof(write_buffer), ctypes.sizeof(write_buffer))
-            ),
-            1,
-            (iovec * 1)(iovec(base_address, ctypes.sizeof(write_buffer))),
-            1,
-            0
-        )
+        with open('/proc/{}/mem'.format(self.pid), 'rb+') as mem:
+            mem.seek(base_address)
+            mem.write(write_buffer)
 
     def read_memory(self, base_address: int, read_buffer: ctypes_buffer_t) -> ctypes_buffer_t:
-
-        _libc.process_vm_readv(
-            self.pid,
-            (iovec * 1)(
-                iovec(ctypes.addressof(read_buffer), ctypes.sizeof(read_buffer))
-            ),
-            1,
-            (iovec * 1)(iovec(base_address, ctypes.sizeof(read_buffer))),
-            1,
-            0
-        )
-        
+        with open('/proc/{}/mem'.format(self.pid), 'rb+') as mem:
+            mem.seek(base_address)
+            mem.readinto(read_buffer)
         return read_buffer
 
     def get_path(self) -> str:
@@ -109,41 +96,43 @@ class Process(AbstractProcess):
         return pids
 
     @staticmethod
-    def get_pid_by_name(target_name: str) -> int or None:
+    def get_pid_by_name(target_name: str) -> Optional[int]:
         for pid in Process.list_available_pids():
             try:
-                logger.info('Checking name for pid {}'.format(pid))
+                logger.debug('Checking name for pid {}'.format(pid))
                 with open('/proc/{}/cmdline'.format(pid), 'rb') as cmdline:
                     path = cmdline.read().decode().split('\x00')[0]
             except FileNotFoundError:
                 continue
 
             name = os.path.basename(path)
-            logger.info('Name was "{}"'.format(name))
+            logger.debug('Name was "{}"'.format(name))
             if path is not None and name == target_name:
                 return pid
 
         logger.info('Found no process with name {}'.format(target_name))
         return None
 
-    def list_mapped_regions_by_name(self,
-                                    writeable_only=True,
-                                    name=None,
-                                    include_anons=True) -> List[Tuple[int, int]]:
+    def list_mapped_regions(self, writeable_only: bool = True, include_paths = []) -> List[Tuple[int, int]]:
         regions = []
         with open('/proc/{}/maps'.format(self.pid), 'r') as maps:
             for line in maps:
-
-                bounds, privileges = line.split()[0:2]
-                
-                if (not include_anons or name is not None) and len(line.split()) < 6:
+                if "/dev/dri/" in line:
+                    continue
+                if "/dev/shm/" in line:
+                    continue
+                if "Proton" in line:
                     continue
 
-                _name = os.path.basename(''.join(line.split()[5:]))
-                print(_name == name)
-                if name is not None and _name != name:
-                    continue
-                
+                whole = line.split()
+                if len(whole) < 6:
+                    whole.append('')
+                if include_paths:
+                    if not any(re.match(x, whole[5]) is not None for x in include_paths) and not any(re.match(re.escape(x), whole[5]) is not None for x in include_paths):
+                        continue
+
+                bounds, privileges = whole[0:2]
+
                 if 'r' not in privileges:
                     continue
 
