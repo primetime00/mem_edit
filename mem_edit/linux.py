@@ -119,8 +119,6 @@ class Process(AbstractProcess):
             for line in maps:
                 if "/dev/dri/" in line:
                     continue
-                if "/dev/shm/" in line:
-                    continue
                 if "Proton" in line:
                     continue
 
