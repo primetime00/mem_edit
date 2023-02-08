@@ -14,7 +14,7 @@ import re
 
 from .abstract import Process as AbstractProcess
 from .utils import ctypes_buffer_t, MemEditError
-
+import fnmatch
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +52,15 @@ def ptrace(command: int, pid: int = 0, arg1: int = 0, arg2: int = 0) -> int:
 
 class Process(AbstractProcess):
     pid = None
+    blacklist = []
 
     def __init__(self, process_id: int):
         ptrace(ptrace_commands['PTRACE_SEIZE'], process_id)
         self.pid = process_id
+
+    @staticmethod
+    def set_blacklist(bl: list):
+        Process.blacklist = bl
 
     def close(self):
         os.kill(self.pid, signal.SIGSTOP)
@@ -113,7 +118,7 @@ class Process(AbstractProcess):
         logger.info('Found no process with name {}'.format(target_name))
         return None
 
-    def list_mapped_regions(self, writeable_only: bool = True, include_paths = []) -> List[Tuple[int, int]]:
+    def list_mapped_regions(self, writeable_only: bool = True, include_paths=[]) -> List[Tuple[int, int]]:
         regions = []
         with open('/proc/{}/maps'.format(self.pid), 'r') as maps:
             for line in maps:
@@ -125,8 +130,14 @@ class Process(AbstractProcess):
                 whole = line.split()
                 if len(whole) < 6:
                     whole.append('')
+                if len(whole) >= 7:
+                    whole[5] = " ".join(whole[5:])
                 if include_paths:
                     if not any(re.match(x, whole[5]) is not None for x in include_paths) and not any(re.match(re.escape(x), whole[5]) is not None for x in include_paths):
+                        continue
+
+                if self.blacklist:
+                    if any(fnmatch.fnmatch(whole[5], x) for x in self.blacklist):
                         continue
 
                 bounds, privileges = whole[0:2]

@@ -135,6 +135,7 @@ class SYSTEM_INFO(ctypes.Structure):
 class Process(AbstractProcess):
     process_handle = None
     pid = None
+    blacklist = []
 
     def __init__(self, process_id: int):
         process_handle = ctypes.windll.kernel32.OpenProcess(
@@ -148,6 +149,10 @@ class Process(AbstractProcess):
 
         self.process_handle = process_handle
         self.pid = process_id
+
+    @staticmethod
+    def set_blacklist(bl: list):
+        Process.blacklist = bl
 
     def close(self):
         ctypes.windll.kernel32.CloseHandle(self.process_handle)
@@ -247,7 +252,7 @@ class Process(AbstractProcess):
         logger.info('Found no process with name {}'.format(target_name))
         return None
 
-    def list_mapped_regions(self, writeable_only: bool = True, include_paths = []) -> List[Tuple[int, int]]:
+    def list_mapped_regions(self, writeable_only: bool = True, include_paths=[]) -> List[Tuple[int, int]]:
         sys_info = SYSTEM_INFO()
         sys_info_ptr = ctypes.byref(sys_info)
         ctypes.windll.kernel32.GetSystemInfo(sys_info_ptr)

@@ -134,6 +134,11 @@ class Process(metaclass=ABCMeta):
         """
         pass
 
+    @staticmethod
+    @abstractmethod
+    def set_blacklist(bl: list):
+        pass
+
     @abstractmethod
     def close(self):
         """

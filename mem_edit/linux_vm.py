@@ -13,6 +13,8 @@ import logging
 
 from .abstract import Process as AbstractProcess
 from .utils import ctypes_buffer_t
+import re
+import fnmatch
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,10 @@ class Process(AbstractProcess):
     def __init__(self, process_id: int):
         self.pid = process_id
 
+    @staticmethod
+    def set_blacklist(bl: list):
+        Process.blacklist = bl
+
     def close(self):
         self.pid = None
 
@@ -106,7 +112,7 @@ class Process(AbstractProcess):
         logger.info('Found no process with name {}'.format(target_name))
         return None
 
-    def list_mapped_regions(self, writeable_only: bool = True, include_paths = []) -> List[Tuple[int, int]]:
+    def list_mapped_regions(self, writeable_only: bool = True, include_paths=[]) -> List[Tuple[int, int]]:
         regions = []
         with open('/proc/{}/maps'.format(self.pid), 'r') as maps:
             for line in maps:
@@ -114,7 +120,21 @@ class Process(AbstractProcess):
                     continue
                 if "Proton" in line:
                     continue
-                bounds, privileges = line.split()[0:2]
+
+                whole = line.split()
+                if len(whole) < 6:
+                    whole.append('')
+                if len(whole) >= 7:
+                    whole[5] = " ".join(whole[5:])
+                if include_paths:
+                    if not any(re.match(x, whole[5]) is not None for x in include_paths) and not any(re.match(re.escape(x), whole[5]) is not None for x in include_paths):
+                        continue
+
+                if self.blacklist:
+                    if any(fnmatch.fnmatch(whole[5], x) for x in self.blacklist):
+                        continue
+
+                bounds, privileges = whole[0:2]
 
                 if 'r' not in privileges:
                     continue
