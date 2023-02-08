@@ -9,9 +9,11 @@ import os.path
 import ctypes
 import ctypes.wintypes
 import logging
+import fnmatch
 
 from .abstract import Process as AbstractProcess
 from .utils import ctypes_buffer_t, MemEditError
+
 
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,10 @@ if PTR_SIZE == 8:       # 64-bit python
     MEMORY_BASIC_INFORMATION = MEMORY_BASIC_INFORMATION64
 elif PTR_SIZE == 4:     # 32-bit python
     MEMORY_BASIC_INFORMATION = MEMORY_BASIC_INFORMATION32
+
+GetMappedFileName = ctypes.windll.psapi.GetMappedFileNameW
+GetMappedFileName.argtypes = [ctypes.wintypes.HANDLE, ctypes.wintypes.LPVOID, ctypes.wintypes.LPWSTR, ctypes.wintypes.DWORD]
+GetMappedFileName.restype = ctypes.wintypes.DWORD
 
 ctypes.windll.kernel32.VirtualQueryEx.argtypes = [
     ctypes.wintypes.HANDLE,
@@ -285,6 +291,7 @@ class Process(AbstractProcess):
 
         regions = []
         page_ptr = start
+        image_filename = ctypes.create_unicode_buffer(u"", 260)
         while page_ptr < stop:
             page_info = get_mem_info(page_ptr)
             if ( (page_info.Type == mem_types['MEM_PRIVATE'] or page_info.Type == mem_types['MEM_MAPPED'] or page_info.Type == mem_types['MEM_IMAGE'])
@@ -292,6 +299,20 @@ class Process(AbstractProcess):
                     and page_info.Protect & page_protections['PAGE_READABLE'] != 0
                     and (page_info.Protect & page_protections['PAGE_READWRITEABLE'] != 0
                          or not writeable_only)):
+
+                GetMappedFileName(self.process_handle, page_ptr, image_filename, 260)
+                pathname = image_filename.value if len(image_filename.value) > 0 else ' '
+
+                if include_paths:
+                    if pathname not in include_paths:
+                        page_ptr += page_info.RegionSize
+                        continue
+
+                if self.blacklist:
+                    if any(fnmatch.fnmatch(pathname, x) for x in self.blacklist):
+                        page_ptr += page_info.RegionSize
+                        continue
+
                 regions.append((page_ptr, page_ptr + page_info.RegionSize))
             page_ptr += page_info.RegionSize
 
